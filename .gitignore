@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.DS_Store
+tools/node_modules/
+out/
+work/
+.work/
+samples/out-*/
+*.tmp

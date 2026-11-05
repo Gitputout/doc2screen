@@ -1,0 +1,58 @@
+{
+  "phone-notes": {
+    "label": "Phone · 0.706 (Notes-like)",
+    "cssWidth": 390,
+    "cssHeight": 552,
+    "baseFont": 17,
+    "margin": 16,
+    "lineHeight": 1.8
+  },
+  "phone-16x9.5": {
+    "label": "6.39-inch 16:9.5",
+    "cssWidth": 390,
+    "cssHeight": 657,
+    "baseFont": 17,
+    "margin": 16,
+    "lineHeight": 1.8
+  },
+  "phone-16x9": {
+    "label": "6.x-inch 16:9",
+    "cssWidth": 390,
+    "cssHeight": 693,
+    "baseFont": 17,
+    "margin": 16,
+    "lineHeight": 1.8
+  },
+  "phone-19.5x9": {
+    "label": "6.x-inch 19.5:9",
+    "cssWidth": 390,
+    "cssHeight": 845,
+    "baseFont": 17,
+    "margin": 16,
+    "lineHeight": 1.8
+  },
+  "kindle": {
+    "label": "Kindle 6-inch",
+    "cssWidth": 600,
+    "cssHeight": 800,
+    "baseFont": 18,
+    "margin": 24,
+    "lineHeight": 1.75
+  },
+  "a5": {
+    "label": "A5",
+    "cssWidth": 559,
+    "cssHeight": 794,
+    "baseFont": 11,
+    "margin": 28,
+    "lineHeight": 1.7
+  },
+  "a4": {
+    "label": "A4",
+    "cssWidth": 794,
+    "cssHeight": 1123,
+    "baseFont": 11,
+    "margin": 36,
+    "lineHeight": 1.7
+  }
+}

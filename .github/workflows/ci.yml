@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python deps
+        run: python -m pip install --upgrade pip pymupdf lxml
+      - name: Install pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+      - name: Python syntax
+        run: python -m py_compile scripts/*.py
+      - name: JavaScript syntax
+        run: |
+          node -c scripts/export_pdf.js
+          node -c scripts/verify_html.js
+      - name: Profile helper
+        run: |
+          python scripts/profile_helper.py \
+            --inches 6.39 --aspect 16:9.5 \
+            --page-ratio 0.706 --css-width 390 \
+            --name phone-notes > /dev/null
+      - name: Build sample HTML (no Chrome needed)
+        run: |
+          printf '# CI sample\n\nHello **world**.\n\n- one\n- two\n' > /tmp/sample.md
+          python scripts/doc2screen.py build /tmp/sample.md \
+            --formats html --no-verify --out /tmp/out
+          test -f /tmp/out/*.html
