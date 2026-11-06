@@ -50,11 +50,9 @@ def needs_ocr(info: dict) -> bool:
     pages = int(info.get("pages") or 0)
     if pages <= 0:
         return False
-    scanned = int(info.get("scannedLikePages") or 0)
-    text_chars = int(info.get("textChars") or 0)
-    if scanned <= 0:
-        return False
-    return text_chars < pages * 40
+    # inspect_pdf detects scans one page at a time. Text on other pages must
+    # not suppress OCR for an image-only page in a mixed PDF.
+    return int(info.get("scannedLikePages") or 0) > 0
 
 
 def _page_arg(pages) -> str | None:

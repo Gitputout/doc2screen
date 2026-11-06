@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Detect OCR needs per scanned page, including PDFs that mix text and scans.
+- Retain a scan image when OCR does not add text to that page.
+- Tighten printed-TOC detection and retain isolated TOC-looking lines in body pages.
+
 ## v0.2.0 — 2026-11-06
 
 ### Added

@@ -139,15 +139,29 @@ def extract(src: Path, out_dir: Path, fixes: list[tuple[str, str]],
     original_src = src
     if suffix == ".pdf":
         from extract_pdf import extract_pdf, inspect_pdf
+        skip_background_pages: set[int] = set()
         if ocr != "off":
             from ocr_pdf import needs_ocr, ocr_pdf
             info = inspect_pdf(str(src))
             if ocr == "force" or (ocr == "auto" and needs_ocr(info)):
                 ocr_path = ocr_pdf(src, out_dir, lang=ocr_lang, pages=page_indices)
+                # Keep an image-only page when OCR found no text. Suppress a
+                # scan background only where OCR actually added readable text.
+                import pymupdf
+                with pymupdf.open(str(src)) as original, \
+                     pymupdf.open(str(ocr_path)) as processed:
+                    selected = (page_indices if page_indices is not None
+                                else range(original.page_count))
+                    for i in selected:
+                        before = original[i].get_text().strip()
+                        after = processed[i].get_text().strip()
+                        if (len(before) < 20 and original[i].get_images(full=True)
+                                and len(after) > len(before)):
+                            skip_background_pages.add(i)
                 src = ocr_path
                 used_ocr = True
         doc = extract_pdf(str(src), str(out_dir), page_indices=page_indices,
-                          skip_full_page_images=used_ocr)
+                          skip_full_page_images=skip_background_pages)
         if used_ocr:
             doc["meta"]["source"] = str(original_src)
             doc["meta"]["sourceHash"] = "sha256:" + sha256_file(original_src)

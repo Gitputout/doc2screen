@@ -14,12 +14,13 @@ import unittest
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from common import clean_inline_html  # noqa: E402
 from doc2screen import (_formats, _input_path, _parse_page_indices, _sample_doc,
-                        cmd_preview, cmd_verify, pdf_ok, trim_doc)  # noqa: E402
+                        cmd_preview, cmd_verify, extract, pdf_ok, trim_doc)  # noqa: E402
 from export_epub import epub_report, export_epub  # noqa: E402
 from ocr_pdf import _page_arg, needs_ocr, ocr_command  # noqa: E402
 
@@ -73,9 +74,9 @@ class CoreChecks(unittest.TestCase):
     def test_ocr_detection_and_command(self):
         self.assertTrue(needs_ocr({"pages": 1, "scannedLikePages": 1, "textChars": 0}))
         self.assertTrue(needs_ocr({"pages": 4, "scannedLikePages": 3, "textChars": 100}))
-        self.assertFalse(needs_ocr({"pages": 4, "scannedLikePages": 3, "textChars": 1000}))
+        self.assertTrue(needs_ocr({"pages": 4, "scannedLikePages": 3, "textChars": 1000}))
         self.assertFalse(needs_ocr({"pages": 1, "scannedLikePages": 0, "textChars": 100}))
-        self.assertFalse(needs_ocr({"pages": 100, "scannedLikePages": 1, "textChars": 10000}))
+        self.assertTrue(needs_ocr({"pages": 100, "scannedLikePages": 1, "textChars": 10000}))
         self.assertEqual(_page_arg([0, 2, 3]), "1,3,4")
         cmd = ocr_command(Path("in.pdf"), Path("out.pdf"), lang="chi_sim+eng",
                           pages=[0, 2, 3])
@@ -89,8 +90,8 @@ class CoreChecks(unittest.TestCase):
             import pymupdf
         except ImportError:
             self.skipTest("pymupdf is not installed")
-        from extract_pdf import extract_pdf
-        from ocr_pdf import ocr_pdf, ocr_status
+        from extract_pdf import inspect_pdf
+        from ocr_pdf import ocr_status
 
         if not ocr_status("eng")["ok"]:
             self.skipTest("Tesseract English data is not installed")
@@ -105,14 +106,46 @@ class CoreChecks(unittest.TestCase):
             d.close()
             d = pymupdf.open()
             p = d.new_page(width=600, height=300)
+            p.insert_text((50, 100), "Ordinary text page. " * 12, fontsize=12)
+            p = d.new_page(width=600, height=300)
             p.insert_image(p.rect, filename=str(png))
             d.save(str(scan_pdf))
             d.close()
-            ocr_pdf_path = ocr_pdf(scan_pdf, Path(tmp) / "work", lang="eng")
-            doc = extract_pdf(str(ocr_pdf_path), str(Path(tmp) / "extract"),
-                              skip_full_page_images=True)
+            info = inspect_pdf(str(scan_pdf))
+            self.assertEqual(info["scannedLikePages"], 1)
+            self.assertTrue(info["ocrNeeded"])
+            doc = extract(scan_pdf, Path(tmp) / "work", [], ocr="auto", ocr_lang="eng")
             text = " ".join(b.get("text", "") for b in doc["blocks"])
+            self.assertIn("Ordinary text page", text)
             self.assertIn("HELLO", text.upper())
+            self.assertFalse(any(b["type"] == "figure" and b["source"]["page"] == 2
+                                 for b in doc["blocks"]))
+
+    def test_ocr_keeps_scan_image_when_no_text_was_added(self):
+        try:
+            import pymupdf
+        except ImportError:
+            self.skipTest("pymupdf is not installed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            png = Path(tmp) / "blank-scan.png"
+            image = pymupdf.open()
+            page = image.new_page(width=600, height=300)
+            page.draw_rect(pymupdf.Rect(80, 80, 520, 220),
+                           color=(0, 0, 0), fill=(0, 0, 0))
+            page.get_pixmap().save(str(png))
+            image.close()
+
+            pdf = Path(tmp) / "blank-scan.pdf"
+            d = pymupdf.open()
+            p = d.new_page(width=600, height=300)
+            p.insert_image(p.rect, filename=str(png))
+            d.save(str(pdf))
+            d.close()
+            # Simulate OCR producing a PDF but finding no text on this page.
+            with patch("ocr_pdf.ocr_pdf", return_value=pdf):
+                doc = extract(pdf, Path(tmp) / "work", [], ocr="auto", ocr_lang="eng")
+            self.assertTrue(any(b["type"] == "figure" for b in doc["blocks"]))
 
     def test_sample_doc_keeps_representative_blocks(self):
         doc = {
@@ -287,6 +320,31 @@ class CoreChecks(unittest.TestCase):
             self.assertFalse(any("...." in t for t in texts))
             self.assertTrue(any("Chapter 1" in t for t in texts))
             self.assertEqual(doc["meta"]["tocPages"], 1)
+
+    def test_pdf_prose_with_ellipses_is_not_discarded(self):
+        try:
+            import pymupdf
+        except ImportError:
+            self.skipTest("pymupdf is not installed")
+        from extract_pdf import extract_pdf, inspect_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "prose.pdf"
+            d = pymupdf.open()
+            p = d.new_page(width=390, height=552)
+            lines = ["API examples", "wait...", "retry...", "continue...",
+                     "Example........3", "Important paragraph survives."]
+            for i, line in enumerate(lines):
+                p.insert_text((40, 100 + i * 24), line, fontsize=11)
+            d.save(str(pdf))
+            d.close()
+            self.assertEqual(inspect_pdf(str(pdf))["tocPages"], 0)
+            doc = extract_pdf(str(pdf), str(Path(tmp) / "work"))
+            text = " ".join(b.get("text", "") for b in doc["blocks"])
+            self.assertIn("wait...", text)
+            self.assertIn("Example........3", text)
+            self.assertIn("Important paragraph survives.", text)
+            self.assertEqual(doc["meta"]["tocPages"], 0)
 
     @unittest.skipUnless(shutil.which("pandoc"), "pandoc is required")
     def test_preview_generates_html_and_report(self):

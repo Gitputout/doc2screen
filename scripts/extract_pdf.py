@@ -22,7 +22,6 @@ TOC_LINE_RE = re.compile(
     r"(?:\d{1,4}|[ivxlcdmIVXLCDM]{1,8})\s*$",
     re.I)
 TOC_HEADING_RE = re.compile(r"^\s*(?:目\s*录|目\s*錄|contents|table\s+of\s+contents)\s*$", re.I)
-TOC_DOTTED_RE = re.compile(r"(?:[.．·_]\s*){3,}$")
 
 
 def _is_mono(font: str, flags: int) -> bool:
@@ -54,17 +53,21 @@ def _toc_texts(texts: list[str]) -> tuple[bool, int]:
     """Detect a printed table of contents from page lines."""
     clean = [t.strip() for t in texts if t.strip()]
     matches = sum(1 for t in clean if TOC_LINE_RE.match(t))
-    dotted = sum(1 for t in clean if TOC_DOTTED_RE.search(t))
     heading = any(TOC_HEADING_RE.match(t) for t in clean)
-    if dotted >= 3 and len(clean) >= 4:
+    entries = [t for t in clean if not TOC_HEADING_RE.match(t)
+               and not PAGE_NUM_RE.match(t)]
+    if not entries:
+        return False, matches
+    if heading and matches >= 2 and matches * 2 >= len(entries):
         return True, matches
-    if heading and len(clean) >= 4:
-        trailing = sum(1 for t in clean
-                       if not TOC_HEADING_RE.match(t)
-                       and re.search(r"\s+\d{1,4}\s*$", t))
-        if trailing >= max(2, len(clean) // 2):
+    if heading:
+        numbered = sum(1 for t in entries
+                       if len(t) <= 160 and re.search(r"\s+\d{1,4}\s*$", t))
+        if numbered >= 3 and numbered * 4 >= len(entries) * 3:
             return True, matches
-    return matches >= 3 or (heading and matches >= 2), matches
+    # Without a heading, require several page-numbered entries and a strong
+    # majority; ellipses at the end of ordinary prose are not enough.
+    return matches >= 4 and matches * 4 >= len(entries) * 3, matches
 
 
 def _toc_page_info(page_blocks: list[dict]) -> tuple[bool, int, int]:
@@ -278,8 +281,6 @@ def _classify(st: dict, body: float, body_x0: float) -> str:
     txt = st["text"]
     if not txt.strip():
         return "skip"
-    if TOC_LINE_RE.match(txt.strip()):
-        return "toc"
     if st["mono_ratio"] >= 0.55 and st["max_size"] <= body * 1.2:
         return "code"
     if (st["max_size"] >= body * 1.3 and len(txt) <= 160) or \
@@ -364,7 +365,7 @@ def inspect_pdf(path: str) -> dict:
         "kind": "pdf", "pages": pages, "textChars": text_chars,
         "images": image_count, "scannedLikePages": blank,
         "tocPages": len(toc_pages), "tocPageNumbers": toc_pages[:20],
-        "ocrNeeded": pages > 0 and blank > 0 and text_chars < pages * 40,
+        "ocrNeeded": blank > 0,
         "radicals": radical, "replacementChars": replacement,
         "metadata": {k: v for k, v in (d.metadata or {}).items() if v},
         "pageSizes": [[round(p.rect.width, 1), round(p.rect.height, 1)] for p in d[:min(3, pages)]],
@@ -373,7 +374,7 @@ def inspect_pdf(path: str) -> dict:
 
 def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = None,
                 page_indices: set[int] | list[int] | None = None,
-                skip_full_page_images: bool = False) -> dict:
+                skip_full_page_images: bool | set[int] = False) -> dict:
     src = Path(path)
     d = pymupdf.open(str(src))
     if page_indices is None:
@@ -384,7 +385,9 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
         raise SystemExit("No pages selected for extraction")
     page_numbers = [i + 1 for i in selected]
     pages_raw = [_page_raw_blocks(d[i], page_numbers[n], fixes or [],
-                                  skip_full_page_images)
+                                  skip_full_page_images is True or
+                                  (isinstance(skip_full_page_images, set) and
+                                   i in skip_full_page_images))
                  for n, i in enumerate(selected)]
     page_heights = [d[i].rect.height for i in selected]
     page_widths = [d[i].rect.width for i in selected]
@@ -466,9 +469,6 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
                 removed_hf += 1
                 continue
             cl = _classify(st, body, body_x0)
-            if cl == "toc":
-                toc_lines += 1
-                continue
             if cl == "skip":
                 continue
             cand = {"kind": cl, "stats": st, "page": page_numbers[pi], "bbox": b["bbox"]}
