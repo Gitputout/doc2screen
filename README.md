@@ -4,7 +4,9 @@ Turn documents into **screen-adaptive reading editions**: one semantic source, m
 
 doc2screen does not wrap the original PDF layout in HTML. It extracts headings, paragraphs, lists, code, tables, and figures into a `DocModel`, then renders a reflowable single-column reader. That is what makes a document readable on a 6-inch phone instead of merely zoomable.
 
-This repository is also a Claude Code Skill: `SKILL.md` tells the agent how to drive the CLI.
+This repository is also a Claude Code and Codex skill: `SKILL.md` tells the agent how to drive the CLI.
+
+![PDF, DOCX, EPUB, Markdown, and text are reorganized into reading editions for phone, e-reader, and tablet screens](assets/workflow.svg)
 
 ## Why
 
@@ -38,13 +40,20 @@ Requirements:
 - Node.js + `puppeteer-core` (for PDF/HTML verification)
 - Google Chrome or Chromium (PDF export)
 
+Install as a skill for Claude Code or Codex, or clone anywhere to use the CLI directly:
+
 ```bash
-git clone https://github.com/Gitputout/doc2screen.git ~/.claude/skills/doc2screen
-cd ~/.claude/skills/doc2screen
+# Claude Code (for Codex, use the commented path instead)
+SKILL_DIR="$HOME/.claude/skills/doc2screen"
+# SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/doc2screen"
+git clone https://github.com/Gitputout/doc2screen.git "$SKILL_DIR"
+cd "$SKILL_DIR"
 python3 -m pip install pymupdf lxml
-(cd tools && npm install)
+npm ci --prefix tools
 python3 scripts/doc2screen.py doctor
 ```
+
+For CLI-only use, clone into any directory and run the same dependency commands there.
 
 On macOS/Linux, `pandoc` is available via Homebrew (`brew install pandoc`) or apt (`apt install pandoc`). Chrome must be installed for PDF export; set `CHROME_PATH` if it is not in a standard location.
 
@@ -55,7 +64,7 @@ Default `build` output is **PDF only**. Add HTML/EPUB explicitly with `--formats
 ## Quick start
 
 ```bash
-SKILL=~/.claude/skills/doc2screen
+SKILL=/path/to/doc2screen
 
 # Inspect
 python3 "$SKILL/scripts/doc2screen.py" inspect input.pdf --out work/
@@ -113,6 +122,7 @@ doc2screen profiles
 - `--start-at/--end-at`: trim everything before/after a heading.
 - `--drop-text`: drop blocks containing text (repeatable). Review before use.
 - `--drop-asset`: drop a figure by asset id (find it in `work/doc.json`).
+- Trim requests fail if the start/end text is not found. `build.json` lists the removed block ids and reasons in `trim.removedBlocks`.
 - `--no-embed`: write an assets folder instead of base64-inlining images.
 
 ## Profiles
@@ -173,6 +183,8 @@ In print CSS, images are scaled with `max-height` so tall screenshots are not cl
 
 A failed check returns a non-zero exit code.
 
+CI runs the end-to-end smoke test with a document containing an image and hard line break, then checks the generated HTML, EPUB, and PDF.
+
 ## Support matrix
 
 | Input | v0.1 |
@@ -208,5 +220,6 @@ A failed check returns a non-zero exit code.
 python3 -m py_compile scripts/*.py
 node -c scripts/export_pdf.js
 node -c scripts/verify_html.js
+python3 -m unittest discover -s tests
 bash tests/smoke.sh
 ```

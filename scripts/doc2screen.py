@@ -14,14 +14,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import pymupdf  # noqa: E402
-
 from common import (SKILL_DIR, dump_json, get_profile, load_json,
                     safe_filename, text_of_html)  # noqa: E402
-from extract_pdf import extract_pdf, inspect_pdf  # noqa: E402
-from extract_pandoc import extract_txt, extract_via_pandoc  # noqa: E402
-from render import render  # noqa: E402
-from export_epub import export_epub, epub_report  # noqa: E402
 
 
 def _fixes(values) -> list[tuple[str, str]]:
@@ -72,14 +66,16 @@ def trim_doc(doc: dict, start_at: str | None = None, end_at: str | None = None,
         return None
     if start_at:
         idx = find_idx(start_at, ("heading", "paragraph"))
-        if idx is not None:
-            removed.extend({"id": b["id"], "reason": "before-start"} for b in blocks[:idx])
-            blocks = blocks[idx:]
+        if idx is None:
+            raise SystemExit(f"--start-at not found: {start_at}")
+        removed.extend({"id": b["id"], "reason": "before-start"} for b in blocks[:idx])
+        blocks = blocks[idx:]
     if end_at:
         idx = find_idx(end_at, ("heading", "paragraph"))
-        if idx is not None:
-            removed.extend({"id": x["id"], "reason": "after-end"} for x in blocks[idx:])
-            blocks = blocks[:idx]
+        if idx is None:
+            raise SystemExit(f"--end-at not found after start: {end_at}")
+        removed.extend({"id": x["id"], "reason": "after-end"} for x in blocks[idx:])
+        blocks = blocks[:idx]
     if drop_text:
         keep = []
         for b in blocks:
@@ -101,7 +97,7 @@ def trim_doc(doc: dict, start_at: str | None = None, end_at: str | None = None,
                 keep.append(b)
         blocks = keep
     doc["blocks"] = blocks
-    doc["stats"] = {"pages": 0, "blocks": len(blocks),
+    doc["stats"] = {"pages": doc.get("stats", {}).get("pages", 0), "blocks": len(blocks),
                     "figures": sum(1 for b in blocks if b.get("type") == "figure"),
                     "codeBlocks": sum(1 for b in blocks if b.get("type") == "code")}
     return {"removed": removed, "kept": len(blocks)}
@@ -111,10 +107,13 @@ def extract(src: Path, out_dir: Path, fixes: list[tuple[str, str]]) -> dict:
     suffix = src.suffix.lower()
     out_dir.mkdir(parents=True, exist_ok=True)
     if suffix == ".pdf":
+        from extract_pdf import extract_pdf
         doc = extract_pdf(str(src), str(out_dir))
     elif suffix == ".txt":
+        from extract_pandoc import extract_txt
         doc = extract_txt(str(src), str(out_dir))
     elif suffix in {".docx", ".odt", ".epub", ".html", ".htm", ".md", ".markdown", ".rst", ".tex"}:
+        from extract_pandoc import extract_via_pandoc
         doc = extract_via_pandoc(str(src), str(out_dir))
     else:
         raise SystemExit(f"Unsupported input: {suffix}")
@@ -131,6 +130,7 @@ def cmd_inspect(args) -> int:
     out = Path(args.out or "work")
     out.mkdir(parents=True, exist_ok=True)
     if src.suffix.lower() == ".pdf":
+        from extract_pdf import inspect_pdf
         info = inspect_pdf(str(src))
     else:
         info = {"kind": src.suffix.lower().lstrip("."), "size": src.stat().st_size,
@@ -159,6 +159,7 @@ def _profile_from(args, doc=None):
 
 
 def cmd_render(args) -> int:
+    from render import render
     doc_path = Path(args.doc).resolve()
     doc = load_json(doc_path)
     profile = _profile_from(args, doc)
@@ -190,6 +191,7 @@ def export_pdf(html: Path, pdf: Path, profile: dict, title: str) -> dict:
 
 def add_pdf_outline(pdf: Path, doc: dict) -> int:
     """Add bookmarks from level 1/2 headings (PyMuPDF, optional)."""
+    import pymupdf
     heads = [b for b in doc.get("blocks", []) if b["type"] == "heading"
              and int(b.get("level", 3)) <= 2 and b.get("text")]
     if len(heads) < 2:
@@ -229,6 +231,7 @@ def add_pdf_outline(pdf: Path, doc: dict) -> int:
 
 
 def pdf_report(pdf: Path, profile: dict) -> dict:
+    import pymupdf
     d = pymupdf.open(str(pdf))
     blank = 0
     imgs = 0
@@ -255,6 +258,15 @@ def pdf_report(pdf: Path, profile: dict) -> dict:
             "outline": len(d.get_toc())}
 
 
+def pdf_ok(report: dict) -> bool:
+    return (report.get("pages", 0) > 0
+            and report.get("blankPages") == 0
+            and not report.get("aspectMismatch")
+            and all(abs(actual - expected) <= 1 for actual, expected in
+                    zip(report.get("pageSize", []), report.get("expectedSize", [])))
+            and len(report.get("pageSize", [])) == len(report.get("expectedSize", [])) == 2)
+
+
 def verify_html(html: Path, profile: dict, out_json: Path) -> dict:
     node, pp = _node_env()
     if not node or not pp:
@@ -272,6 +284,8 @@ def verify_html(html: Path, profile: dict, out_json: Path) -> dict:
 
 
 def cmd_build(args) -> int:
+    from render import render
+    from export_epub import export_epub, epub_report
     src = Path(args.input).resolve()
     out = Path(args.out or "out").resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -287,7 +301,9 @@ def cmd_build(args) -> int:
     name = args.name or safe_filename(doc.get("meta", {}).get("title", src.stem))
     formats = [x.strip().lower() for x in (args.formats or "pdf").split(",") if x.strip()]
     result = {"input": str(src), "profile": profile.get("id"),
-              "trim": {"kept": trim_report.get("kept"), "removed": len(trim_report.get("removed", []))},
+              "trim": {"kept": trim_report.get("kept"),
+                       "removed": len(trim_report.get("removed", [])),
+                       "removedBlocks": trim_report.get("removed", [])},
               "outputs": {}}
 
     need_html = "html" in formats or "pdf" in formats
@@ -319,14 +335,17 @@ def cmd_build(args) -> int:
     print(json.dumps(result, ensure_ascii=False, indent=1))
     ok = result.get("verify_html", {}).get("ok", True)
     if "pdf" in formats:
-        ok = ok and result.get("verify_pdf", {}).get("blankPages", 0) == 0
+        ok = ok and (args.no_verify or pdf_ok(result.get("verify_pdf", {})))
     if "epub" in formats:
         ok = ok and result.get("verify_epub", {}).get("ok", True)
     return 0 if ok else 1
 
 
 def cmd_verify(args) -> int:
+    from export_epub import epub_report
     target = Path(args.target).resolve()
+    if not target.exists():
+        raise SystemExit(f"Verification target does not exist: {target}")
     out = Path(args.out or (target.parent if target.is_file() else target))
     out.mkdir(parents=True, exist_ok=True)
     result = {"ok": True, "checks": {}}
@@ -351,11 +370,14 @@ def cmd_verify(args) -> int:
     if epub:
         result["checks"]["epub"] = epub_report(str(epub))
         result["ok"] = result["ok"] and result["checks"]["epub"]["ok"]
+    if not result["checks"]:
+        raise SystemExit(f"No supported output found to verify: {target}")
     print(json.dumps(result, ensure_ascii=False, indent=1))
     return 0 if result["ok"] else 1
 
 
 def cmd_doctor(args) -> int:
+    from importlib import metadata, util
     node, pp = _node_env()
     chrome = None
     for p in [os.environ.get("CHROME_PATH"),
@@ -366,8 +388,8 @@ def cmd_doctor(args) -> int:
             break
     info = {
         "python": sys.version.split()[0],
-        "pymupdf": getattr(pymupdf, "__version__", "?"),
-        "lxml": __import__("lxml").__version__,
+        "pymupdf": metadata.version("PyMuPDF") if util.find_spec("pymupdf") else "missing",
+        "lxml": metadata.version("lxml") if util.find_spec("lxml") else "missing",
         "pandoc": shutil.which("pandoc"),
         "node": node,
         "puppeteer-core": pp or "missing (cd tools && npm install)",

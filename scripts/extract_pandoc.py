@@ -108,7 +108,7 @@ class Builder:
         w = self.doc["assets"][aid]["width"]
         h = self.doc["assets"][aid]["height"]
         aspect = (w / h) if h else 1.0
-        luma = image_luma(dest)
+        luma = image_luma(path)
         if luma >= 165:
             role, layout = "diagram", "fit"
         elif aspect >= 4:
@@ -172,7 +172,8 @@ class Builder:
             return
         if tag == "table":
             html = lhtml.tostring(el, encoding="unicode", method="html")
-            self.blocks.append(block("table", id=f"b{len(self.blocks)+1:04d}", html=html))
+            self.blocks.append(block("table", id=f"b{len(self.blocks)+1:04d}",
+                                     html=clean_inline_html(html)))
             return
         if tag == "figure":
             cap_el = el.find(".//figcaption")
@@ -211,7 +212,7 @@ def extract_via_pandoc(path: str, out_dir: str) -> dict:
     work.mkdir(parents=True, exist_ok=True)
     raw = work / "raw.html"
     cmd = ["pandoc", str(src), "-f", fmt, "-t", "html5", "--wrap=none",
-           "--extract-media=assets", "-o", "raw.html"]
+           f"--resource-path={src.parent}", "--extract-media=assets", "-o", "raw.html"]
     proc = subprocess.run(cmd, cwd=work, capture_output=True, text=True)
     if proc.returncode != 0:
         raise SystemExit("Pandoc failed:\n" + (proc.stderr or proc.stdout)[-2000:])

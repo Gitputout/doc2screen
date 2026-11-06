@@ -186,10 +186,12 @@ def epub_report(path: str) -> dict:
                 out["errors"].append("mimetype is not the first entry")
             if z.getinfo("mimetype").compress_type != zipfile.ZIP_STORED:
                 out["errors"].append("mimetype is compressed")
-            for n in ("META-INF/container.xml", "OEBPS/content.opf", "OEBPS/nav.xhtml"):
+            required = ("META-INF/container.xml", "OEBPS/content.opf", "OEBPS/nav.xhtml")
+            for n in required:
                 if n not in names:
                     out["errors"].append(f"missing {n}")
-                else:
+            for n in names:
+                if n in required or n.endswith((".xhtml", ".ncx")):
                     try:
                         ET.fromstring(z.read(n))
                     except Exception as e:

@@ -29,10 +29,10 @@ Do **not** use it for:
 
 ## Quick start
 
-Run from anywhere; paths below are relative to this skill directory.
+Run from anywhere; set `SKILL` to the cloned skill directory. The README has Claude Code and Codex installation examples.
 
 ```bash
-SKILL=~/.claude/skills/doc2screen
+SKILL=/path/to/doc2screen
 
 # 1. Inspect the source
 python3 "$SKILL/scripts/doc2screen.py" inspect input.pdf --out work/
@@ -68,6 +68,7 @@ python3 "$SKILL/scripts/doc2screen.py" build input.pdf \
 - `--drop-text`: remove blocks containing the text (review first).
 - `--drop-asset`: remove a figure by asset id from `work/doc.json`.
 - `--no-embed`: write an assets folder instead of inlining images.
+- `--start-at` and `--end-at` fail when the requested text is not found; review the extracted headings before using them.
 
 Or run `build` directly on a DOCX/EPUB/HTML/MD:
 
@@ -114,7 +115,7 @@ python3 "$SKILL/scripts/profile_helper.py" \
 - TXT: paragraphizer.
 - PPTX: not supported in v1; say so and suggest converting via LibreOffice.
 
-Artifacts: `work/doc.json`, `work/assets/`, `work/extract.log`.
+Artifacts: `work/doc.json` and `work/assets/`. Extraction warnings are recorded in `doc.json`.
 
 ### 3. Review the model (important)
 
@@ -126,7 +127,7 @@ Artifacts: `work/doc.json`, `work/assets/`, `work/extract.log`.
 - figure captions and image order;
 - warnings (OCR pages, missing fonts, text-layer damage).
 
-**Never delete content automatically.** `curate`/`curation.json` uses `keep`, `remove`, `flag` with reasons. If you remove something, report exactly what and why.
+Review content before applying `--start-at`, `--end-at`, `--drop-text`, or `--drop-asset`. The build report records removed block ids and reasons in `build.json` under `trim.removedBlocks`; report the removals to the user.
 
 ### 4. Render
 

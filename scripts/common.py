@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -103,7 +104,7 @@ def join_visual_lines(lines: list[str]) -> str:
 
 
 def esc(s: str) -> str:
-    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    return html.escape(s, quote=True)
 
 
 def text_of_html(html: str) -> str:
@@ -115,7 +116,7 @@ def text_of_html(html: str) -> str:
 
 
 def clean_inline_html(html: str) -> str:
-    """Allow basic inline markup; strip scripts, styles, event handlers, javascript: URLs."""
+    """Keep document markup while removing active content; emit XHTML-safe fragments."""
     from lxml import html as lhtml
     from lxml import etree
     try:
@@ -129,13 +130,16 @@ def clean_inline_html(html: str) -> str:
             continue
         for attr in list(el.attrib):
             val = el.attrib.get(attr, "")
-            if attr.lower().startswith("on") or re.search(r"javascript\s*:", val, re.I):
+            key = attr.lower()
+            if (key.startswith("on") or key in {"style", "srcdoc", "formaction"}
+                    or (key in {"href", "src", "xlink:href"}
+                        and re.match(r"\s*(?:javascript|data|vbscript)\s*:", val, re.I))):
                 del el.attrib[attr]
     parts = []
     if root.text:
         parts.append(esc(root.text))
     for child in root:
-        parts.append(lhtml.tostring(child, encoding="unicode", method="html"))
+        parts.append(lhtml.tostring(child, encoding="unicode", method="xml"))
     return "".join(parts).strip()
 
 
