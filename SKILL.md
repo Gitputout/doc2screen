@@ -1,6 +1,6 @@
 ---
 name: doc2screen
-description: Convert PDF, DOCX, EPUB, HTML, Markdown, and text documents into screen-adaptive reading editions. Use when the user wants to reflow a document for a phone or e-reader, produce a mobile-friendly self-contained HTML, EPUB, or phone-sized PDF, adapt a document to a specific screen size or aspect ratio, remove boilerplate/promotional pages, or build a clean reading version of a long document. Supports PDF text layers, DOCX/EPUB/HTML/Markdown via Pandoc, image extraction, TOC, dark mode, code blocks, and PDF export through Chrome.
+description: Convert PDF, DOCX, EPUB, HTML, Markdown, and text documents into screen-adaptive reading editions. Use when the user wants to reflow a document for a phone or e-reader, produce a mobile-friendly self-contained HTML, EPUB, or phone-sized PDF, adapt a document to a specific screen size or aspect ratio, remove boilerplate/promotional pages, or build a clean reading version of a long document. Supports PDF text layers, OCR for scanned PDFs, preflight preview samples, TOC cleanup, DOCX/EPUB/HTML/Markdown via Pandoc, image extraction, dark mode, code blocks, and PDF export through Chrome.
 ---
 
 # doc2screen
@@ -24,8 +24,9 @@ Use this skill when the user asks to:
 Do **not** use it for:
 
 - editing the source document (use the docx/pdf skills);
-- OCR-heavy scanned books where the user only needs text (recommend MinerU first);
 - pixel-perfect PDF-to-HTML fidelity (this skill reflows by design).
+
+For clean scanned text, use `--ocr auto`; for complex scanned layout, tables, or formulas, recommend MinerU instead.
 
 ## Quick start
 
@@ -37,16 +38,29 @@ SKILL=/path/to/doc2screen
 # 1. Inspect the source
 python3 "$SKILL/scripts/doc2screen.py" inspect input.pdf --out work/
 
-# 2. Extract to a DocModel
-python3 "$SKILL/scripts/doc2screen.py" extract input.pdf --out work/
+# 2. Preview a few pages at candidate profiles before the full build
+python3 "$SKILL/scripts/doc2screen.py" preview input.pdf \
+  --out preview/ --profiles phone-notes,phone-16x9.5 --formats html,pdf
 
-# 3. Build PDF (default; profile defaults to phone-notes)
+# 3. Show the preview to the user and ask:
+#    - Is the content/layout acceptable?
+#    - Which profile/screen size fits?
+#    - Any blocks to drop, title change, or OCR to run?
+#    Only continue after confirmation.
+
+# 4. Build PDF (default; profile defaults to phone-notes)
 python3 "$SKILL/scripts/doc2screen.py" build input.pdf \
   --profile phone-notes --out out/
 
-# 4. Verify
+# 5. Verify
 python3 "$SKILL/scripts/doc2screen.py" verify out/ --profile phone-notes
 ```
+
+**Preflight rule:** For long, scanned, or unfamiliar documents, run `preview` and ask the user before a full `build`. Do not spend a full conversion on an unconfirmed layout, content selection, or screen profile.
+
+`preview` is required for long, scanned, or unfamiliar documents. It samples a few pages, reports `tocPages`, `scannedLikePages`, `ocrNeeded`, and warnings, and writes `preview.json`. Do not run the full `build` before the user approves the sample; this saves time and tokens.
+
+For scanned PDFs, `--ocr auto` (default) runs OCRmyPDF/Tesseract when needed; `--ocr off` keeps page images only; `--ocr force` runs OCR even when auto detection would skip it (pages with an existing text layer are preserved). Set `--ocr-lang chi_tra+eng` for traditional Chinese. Pass the same `--ocr` flags to `preview` and `build`.
 
 The default output is **PDF only**. Add HTML/EPUB only when asked:
 
@@ -67,6 +81,7 @@ python3 "$SKILL/scripts/doc2screen.py" build input.pdf \
 - `--start-at/--end-at`: keep only a heading-delimited range.
 - `--drop-text`: remove blocks containing the text (review first).
 - `--drop-asset`: remove a figure by asset id from `work/doc.json`.
+- `--ocr auto|off|force`: OCR scanned PDFs with OCRmyPDF/Tesseract; `--ocr-lang` defaults to `chi_sim+eng`.
 - `--no-embed`: write an assets folder instead of inlining images.
 - `--start-at` and `--end-at` fail when the requested text is not found; review the extracted headings before using them.
 
@@ -103,21 +118,41 @@ python3 "$SKILL/scripts/profile_helper.py" \
 
 ### 1. Inspect before extracting
 
-`inspect` reports page count, text-layer health (radical/CJK compatibility/replacement characters), image count, suspected scans, and column layout. If the text layer is empty or badly corrupted:
+`inspect` reports page count, text-layer health (radical/CJK compatibility/replacement characters), image count, suspected scans, `tocPages`, and `ocrNeeded`. If the text layer is empty or badly corrupted:
 
-- recommend MinerU for OCR/complex layout;
-- the OCR adapter is planned; v0.1 reports the problem and does not fabricate text.
+- use `--ocr auto` (OCRmyPDF/Tesseract) for scanned PDFs; `--ocr off` is the page-image fallback;
+- for complex layout/tables/formulas, recommend MinerU;
+- never fabricate text.
 
-### 2. Extract
+### 2. Preview before the full build
 
-- PDF text layer: PyMuPDF backend (local, v0.1). The open-source default is planned to be pypdfium2; a `--pdf-backend` switch is planned for Phase 3.
+Run `preview` on the source and show the sample outputs to the user before a full build:
+
+```bash
+python3 "$SKILL/scripts/doc2screen.py" preview input.pdf \
+  --out preview/ --profiles phone-notes,phone-16x9.5 --formats html,pdf
+```
+
+`preview` samples a few representative pages/blocks, renders each candidate profile, and writes `preview.json` with `tocPages`, `scannedLikePages`, `ocrNeeded`, warnings, sample pages/blocks, and output paths. Ask the user:
+
+1. Is the content and layout acceptable?
+2. Which profile/screen size fits, or what is the device size/aspect?
+3. Which blocks should be dropped, and should the title change?
+4. For scanned files, should OCR continue, and in which language?
+
+Do not run the full `build` until the user confirms. This is the main guard against expensive full-document conversions and wrong screen assumptions. Share the sample file paths or screenshots with the user; read only `preview.json` and the relevant sample sections, not the full HTML, to keep the context small. See `docs/conversion-risks.md` for the checklist of TOC, OCR, columns, tables, figures, and text-layer risks.
+
+### 3. Extract
+
+- PDF text layer: PyMuPDF backend (local, v0.2). The open-source default is planned to be pypdfium2; a `--pdf-backend` switch is planned for Phase 3.
+- Scanned PDF: public `--ocr auto` path adds a text layer with OCRmyPDF/Tesseract, then uses the same PyMuPDF extractor.
 - DOCX/ODT/EPUB/HTML/Markdown: Pandoc → semantic HTML → blocks.
 - TXT: paragraphizer.
 - PPTX: not supported in v1; say so and suggest converting via LibreOffice.
 
 Artifacts: `work/doc.json` and `work/assets/`. Extraction warnings are recorded in `doc.json`.
 
-### 3. Review the model (important)
+### 4. Review the model (important)
 
 `doc.json` is intentionally readable. Before rendering a long document, inspect:
 
@@ -129,7 +164,7 @@ Artifacts: `work/doc.json` and `work/assets/`. Extraction warnings are recorded 
 
 Review content before applying `--start-at`, `--end-at`, `--drop-text`, or `--drop-asset`. The build report records removed block ids and reasons in `build.json` under `trim.removedBlocks`; report the removals to the user.
 
-### 4. Render
+### 5. Render
 
 `render` produces a self-contained HTML reader by default:
 
@@ -140,7 +175,7 @@ Review content before applying `--start-at`, `--end-at`, `--drop-text`, or `--dr
 - screen-profile typography;
 - print CSS for PDF export.
 
-### 5. Build
+### 6. Build
 
 `build` = extract → trim → render (internal HTML for PDF) → PDF → verify. **Default `--formats` is `pdf`**; optional: `html`, `epub`. `phone-notes` is the default profile.
 
@@ -148,7 +183,7 @@ PDF export uses Chrome headless through `scripts/export_pdf.js` (puppeteer-core)
 
 EPUB export uses stdlib zip: XHTML chapters, nav, OPF, NCX, CSS, images; no JS.
 
-### 6. Verify
+### 7. Verify
 
 `verify` checks:
 
@@ -164,7 +199,7 @@ Fix failures, do not ship a broken PDF/EPUB.
 
 ## Content curation
 
-Use explicit, auditable options; do not silently delete content:
+Use the preview sample to show the user what will be removed before applying deletion options. Use explicit, auditable options; do not silently delete content:
 
 - `--start-at "Chapter 1"` / `--end-at "Appendix"`: keep a heading-delimited range;
 - `--drop-text "扫码" --drop-text "训练营"`: remove blocks containing text;
@@ -183,7 +218,22 @@ Core:
 - Node.js + `puppeteer-core` (PDF export/verification), installed in `tools/`
 - Google Chrome (PDF export)
 
-Optional/Phase 3: pypdfium2 (permissive PDF backend), MinerU (OCR/complex layout), Tesseract. EPUB export is implemented in v0.1 (basic, no panel splitting yet).
+Optional:
+
+- `ocrmypdf` + `tesseract` + language data (scanned PDF OCR; `chi_sim`/`chi_tra`)
+- pypdfium2 (permissive PDF backend, planned)
+- MinerU (complex layout/tables/formulas, planned adapter)
+
+OCR install:
+
+```bash
+# macOS
+brew install ocrmypdf tesseract-lang
+# Ubuntu
+sudo apt install ocrmypdf tesseract-ocr tesseract-ocr-chi-sim
+```
+
+`doctor` reports OCR availability and installed Tesseract languages. EPUB export is implemented in v0.2 (basic, no panel splitting yet).
 
 Check with:
 
@@ -193,7 +243,7 @@ python3 "$SKILL/scripts/doc2screen.py" doctor
 
 ## License boundaries
 
-- **v0.1 is AGPL-3.0**, because the PDF backend imports PyMuPDF (AGPL-3.0). See `LICENSE`.
+- **v0.2 is AGPL-3.0**, because the PDF backend imports PyMuPDF (AGPL-3.0). See `LICENSE`.
 - A future pypdfium2 backend can allow a permissive license; do not claim Apache/MIT for the current code.
 - PyMuPDF is **AGPL-3.0 or commercial**. Local/personal use is fine; if you distribute this skill with PyMuPDF imported, AGPL obligations apply. The planned open-source default is pypdfium2; PyMuPDF stays an optional backend.
 - Pandoc/Chrome are external commands; do not bundle them.
@@ -206,15 +256,18 @@ python3 "$SKILL/scripts/doc2screen.py" doctor
 Always include:
 
 - input and output paths;
+- the preview path and whether the user approved it;
 - page/block/figure counts;
-- what was removed or flagged (with reasons);
+- what was removed or flagged (with reasons), including printed TOC pages;
 - warnings (scanned pages, OCR, missing fonts, tables/figures kept as images);
 - which profile was used and how to change it.
 
 ## Troubleshooting
 
 - **Text looks corrupted** (`⽤`, `���`): text-layer radical/CJK issue; inspect warns; re-extract with `--fix` or use MinerU/OCR.
+- **Printed TOC merged into body text**: re-run with the current extractor; TOC pages are detected and skipped. Check `tocPages` in `inspect`/`preview.json`.
+- **Scanned PDF has no text**: install `ocrmypdf`, `tesseract`, and language data; run `doctor`; use `--ocr auto` (or `--ocr force`). For complex scans use MinerU.
 - **No images** in DOCX/EPUB: Pandoc `--extract-media` path; check `work/assets/`.
 - **PDF export fails**: check `node`, `puppeteer-core`, Chrome path; run `doctor`.
 - **PDF images clipped**: print CSS must override `.is-strip`/`.is-rot`; verify reports aspect mismatches.
-- **EPUB check fails**: inspect `epub_report`; ensure `mimetype` is first/uncompressed, OPF/nav XML is valid, all manifest hrefs exist. Wide images are full-width in v0.1 (panel splitting planned).
+- **EPUB check fails**: inspect `epub_report`; ensure `mimetype` is first/uncompressed, OPF/nav XML is valid, all manifest hrefs exist. Wide images are full-width in v0.2 (panel splitting planned).

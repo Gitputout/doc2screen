@@ -5,6 +5,7 @@ __pycache__/
 tools/node_modules/
 out/
 work/
+preview/
 .work/
 samples/out-*/
 *.tmp

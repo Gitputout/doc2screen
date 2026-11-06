@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import json
 import posixpath
 import re
 import shutil
@@ -17,8 +18,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from common import clean_inline_html  # noqa: E402
-from doc2screen import _formats, _input_path, cmd_verify, pdf_ok, trim_doc  # noqa: E402
+from doc2screen import (_formats, _input_path, _parse_page_indices, _sample_doc,
+                        cmd_preview, cmd_verify, pdf_ok, trim_doc)  # noqa: E402
 from export_epub import epub_report, export_epub  # noqa: E402
+from ocr_pdf import _page_arg, needs_ocr, ocr_command  # noqa: E402
 
 
 class CoreChecks(unittest.TestCase):
@@ -61,6 +64,73 @@ class CoreChecks(unittest.TestCase):
         report = trim_doc(doc, drop_text=["PROMO"])
         self.assertEqual([b["id"] for b in doc["blocks"]], ["b4"])
         self.assertEqual(len(report["removed"]), 3)
+
+    def test_page_indices_parse(self):
+        self.assertEqual(_parse_page_indices("1,3-4", 5), [0, 2, 3])
+        with self.assertRaises(SystemExit):
+            _parse_page_indices("0", 5)
+
+    def test_ocr_detection_and_command(self):
+        self.assertTrue(needs_ocr({"pages": 1, "scannedLikePages": 1, "textChars": 0}))
+        self.assertTrue(needs_ocr({"pages": 4, "scannedLikePages": 3, "textChars": 100}))
+        self.assertFalse(needs_ocr({"pages": 4, "scannedLikePages": 3, "textChars": 1000}))
+        self.assertFalse(needs_ocr({"pages": 1, "scannedLikePages": 0, "textChars": 100}))
+        self.assertFalse(needs_ocr({"pages": 100, "scannedLikePages": 1, "textChars": 10000}))
+        self.assertEqual(_page_arg([0, 2, 3]), "1,3,4")
+        cmd = ocr_command(Path("in.pdf"), Path("out.pdf"), lang="chi_sim+eng",
+                          pages=[0, 2, 3])
+        self.assertIn("--pages", cmd)
+        self.assertEqual(cmd[cmd.index("--pages") + 1], "1,3,4")
+
+    @unittest.skipUnless(shutil.which("ocrmypdf") and shutil.which("tesseract"),
+                         "OCR tools are not installed")
+    def test_ocr_adds_text_layer(self):
+        try:
+            import pymupdf
+        except ImportError:
+            self.skipTest("pymupdf is not installed")
+        from extract_pdf import extract_pdf
+        from ocr_pdf import ocr_pdf, ocr_status
+
+        if not ocr_status("eng")["ok"]:
+            self.skipTest("Tesseract English data is not installed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_pdf = Path(tmp) / "scan.pdf"
+            png = Path(tmp) / "page.png"
+            d = pymupdf.open()
+            p = d.new_page(width=600, height=300)
+            p.insert_text((80, 160), "HELLO OCR", fontsize=48)
+            p.get_pixmap(dpi=200).save(str(png))
+            d.close()
+            d = pymupdf.open()
+            p = d.new_page(width=600, height=300)
+            p.insert_image(p.rect, filename=str(png))
+            d.save(str(scan_pdf))
+            d.close()
+            ocr_pdf_path = ocr_pdf(scan_pdf, Path(tmp) / "work", lang="eng")
+            doc = extract_pdf(str(ocr_pdf_path), str(Path(tmp) / "extract"),
+                              skip_full_page_images=True)
+            text = " ".join(b.get("text", "") for b in doc["blocks"])
+            self.assertIn("HELLO", text.upper())
+
+    def test_sample_doc_keeps_representative_blocks(self):
+        doc = {
+            "meta": {"title": "T"},
+            "blocks": [
+                {"id": "b1", "type": "heading", "level": 1, "text": "Title"},
+                {"id": "b2", "type": "paragraph", "text": "Body " * 500},
+                {"id": "b3", "type": "code", "text": "print(1)"},
+                {"id": "b4", "type": "figure", "asset": "a1"},
+            ],
+            "stats": {"pages": 3, "blocks": 4, "figures": 1, "codeBlocks": 1},
+        }
+        sample = _sample_doc(doc, max_blocks=2, max_chars=20)
+        types = {b["type"] for b in sample["blocks"]}
+        self.assertIn("heading", types)
+        self.assertIn("code", types)
+        self.assertIn("figure", types)
+        self.assertTrue(sample["preview"]["truncated"])
 
     def test_pdf_report_failures_affect_success(self):
         report = {"pages": 2, "blankPages": 0, "aspectMismatch": [],
@@ -184,6 +254,59 @@ class CoreChecks(unittest.TestCase):
             block = next(b for b in doc["blocks"]
                          if b["type"] in ("heading", "paragraph"))
             self.assertTrue(any(block["source"]["bbox"]))
+
+    def test_pdf_toc_pages_are_skipped(self):
+        try:
+            import pymupdf
+        except ImportError:
+            self.skipTest("pymupdf is not installed")
+        from extract_pdf import extract_pdf, inspect_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "toc.pdf"
+            d = pymupdf.open()
+            p = d.new_page(width=390, height=552)
+            p.insert_text((40, 50), "Contents", fontsize=16)
+            lines = [
+                "1 Introduction........3",
+                "2 Methods........4",
+                "3 Results........5",
+                "4 Conclusion........6",
+            ]
+            for i, line in enumerate(lines):
+                p.insert_text((40, 80 + i * 18), line, fontsize=10)
+            p = d.new_page(width=390, height=552)
+            p.insert_text((40, 60), "Chapter 1", fontsize=15)
+            p.insert_text((40, 100), "Body text that should survive.", fontsize=11)
+            d.save(str(pdf))
+            d.close()
+            info = inspect_pdf(str(pdf))
+            self.assertEqual(info["tocPages"], 1)
+            doc = extract_pdf(str(pdf), str(Path(tmp) / "work"))
+            texts = [b.get("text") or "" for b in doc["blocks"]]
+            self.assertFalse(any("...." in t for t in texts))
+            self.assertTrue(any("Chapter 1" in t for t in texts))
+            self.assertEqual(doc["meta"]["tocPages"], 1)
+
+    @unittest.skipUnless(shutil.which("pandoc"), "pandoc is required")
+    def test_preview_generates_html_and_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "s.md"
+            src.write_text("# Title\n\nBody paragraph.\n\n```python\nprint(1)\n```\n",
+                           encoding="utf-8")
+            out = Path(tmp) / "preview"
+            args = argparse.Namespace(
+                input=str(src), out=str(out), profiles="phone-notes", pages=None,
+                formats="html", limit_pages=3, limit_blocks=12, max_chars=4000,
+                title=None, no_embed=True, ocr="off", ocr_lang="chi_sim+eng",
+                profile=None, width=None, height=None)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cmd_preview(args), 0)
+            report = json.loads((out / "preview.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["profiles"], ["phone-notes"])
+            self.assertGreater(report["sampleBlockCount"], 0)
+            self.assertTrue(report["questions"])
+            self.assertTrue((out / "preview-phone-notes.html").exists())
 
 
 if __name__ == "__main__":

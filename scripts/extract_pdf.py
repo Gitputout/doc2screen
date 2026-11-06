@@ -17,6 +17,12 @@ MONO_HINTS = ("mono", "courier", "menlo", "consolas", "code", "fixed", "typewrit
 PAGE_NUM_RE = re.compile(r"^\s*(?:[-—–]\s*)?(?:\d{1,4}|[ivxlcdmIVXLCDM]{1,8})(?:\s*[-—–])?\s*$")
 BULLET_RE = re.compile(r"^\s*(?:[-•·▪◦●○–—*]|(?:\d{1,2}|[a-zA-Z])[.)、]|[（(]\d{1,2}[)）])\s+")
 CAPTION_RE = re.compile(r"^\s*(?:图|圖|Figure|Fig\.?|表|Table)\s*[0-9一二三四五六七八九十百]+")
+TOC_LINE_RE = re.compile(
+    r"^\s*\S.{0,160}?(?:(?:[.．·_]\s*){3,}|(?:…\s*){2,})"
+    r"(?:\d{1,4}|[ivxlcdmIVXLCDM]{1,8})\s*$",
+    re.I)
+TOC_HEADING_RE = re.compile(r"^\s*(?:目\s*录|目\s*錄|contents|table\s+of\s+contents)\s*$", re.I)
+TOC_DOTTED_RE = re.compile(r"(?:[.．·_]\s*){3,}$")
 
 
 def _is_mono(font: str, flags: int) -> bool:
@@ -34,6 +40,44 @@ def _is_bold(flags: int) -> bool:
 
 def _span_text(spans) -> str:
     return "".join(s.get("text", "") for s in spans)
+
+
+def _line_text(line) -> str:
+    return _span_text(line.get("spans", [])).strip()
+
+
+def _has_toc_line(lines) -> bool:
+    return any(TOC_LINE_RE.match(_line_text(l)) for l in lines)
+
+
+def _toc_texts(texts: list[str]) -> tuple[bool, int]:
+    """Detect a printed table of contents from page lines."""
+    clean = [t.strip() for t in texts if t.strip()]
+    matches = sum(1 for t in clean if TOC_LINE_RE.match(t))
+    dotted = sum(1 for t in clean if TOC_DOTTED_RE.search(t))
+    heading = any(TOC_HEADING_RE.match(t) for t in clean)
+    if dotted >= 3 and len(clean) >= 4:
+        return True, matches
+    if heading and len(clean) >= 4:
+        trailing = sum(1 for t in clean
+                       if not TOC_HEADING_RE.match(t)
+                       and re.search(r"\s+\d{1,4}\s*$", t))
+        if trailing >= max(2, len(clean) // 2):
+            return True, matches
+    return matches >= 3 or (heading and matches >= 2), matches
+
+
+def _toc_page_info(page_blocks: list[dict]) -> tuple[bool, int, int]:
+    texts = []
+    for b in page_blocks:
+        if b["kind"] != "text":
+            continue
+        for line in b["lines"]:
+            t = _line_text(line)
+            if t:
+                texts.append(t)
+    is_toc, matches = _toc_texts(texts)
+    return is_toc, matches, len(texts)
 
 
 def _span_html(spans) -> str:
@@ -132,11 +176,17 @@ def _polish_bbox(b) -> list[float]:
     return [round(float(v), 1) for v in b]
 
 
-def _page_raw_blocks(page, page_no: int, fixes) -> list[dict]:
+def _page_raw_blocks(page, page_no: int, fixes, skip_full_page_images: bool = False) -> list[dict]:
     out = []
+    page_area = max(1.0, page.rect.width * page.rect.height)
     for b in page.get_text("dict")["blocks"]:
         if b.get("type") == 1:
-            out.append({"kind": "image", "bbox": tuple(b.get("bbox", (0, 0, 0, 0))),
+            bbox = tuple(b.get("bbox", (0, 0, 0, 0)))
+            if skip_full_page_images:
+                area = max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+                if area >= page_area * 0.8:
+                    continue
+            out.append({"kind": "image", "bbox": bbox,
                         "image": b.get("image"), "ext": b.get("ext", "png"),
                         "width": b.get("width", 0), "height": b.get("height", 0),
                         "page": page_no})
@@ -228,6 +278,8 @@ def _classify(st: dict, body: float, body_x0: float) -> str:
     txt = st["text"]
     if not txt.strip():
         return "skip"
+    if TOC_LINE_RE.match(txt.strip()):
+        return "toc"
     if st["mono_ratio"] >= 0.55 and st["max_size"] <= body * 1.2:
         return "code"
     if (st["max_size"] >= body * 1.3 and len(txt) <= 160) or \
@@ -277,6 +329,17 @@ def _save_image(b: dict, assets_dir: Path, doc: dict, used: dict) -> str | None:
     return aid
 
 
+def detect_toc_pages(doc) -> list[int]:
+    """Return 0-based page indices that look like printed tables of contents."""
+    out = []
+    for pi, page in enumerate(doc):
+        texts = [t.strip() for t in page.get_text().splitlines() if t.strip()]
+        is_toc, _ = _toc_texts(texts)
+        if is_toc:
+            out.append(pi)
+    return out
+
+
 def inspect_pdf(path: str) -> dict:
     d = pymupdf.open(path)
     pages = d.page_count
@@ -284,7 +347,8 @@ def inspect_pdf(path: str) -> dict:
     image_count = 0
     radical = replacement = 0
     blank = 0
-    for page in d:
+    toc_pages = []
+    for pi, page in enumerate(d):
         t = page.get_text()
         text_chars += len(t)
         image_count += len(page.get_images(full=True))
@@ -293,21 +357,37 @@ def inspect_pdf(path: str) -> dict:
         n, st = norm_text(t)
         radical += st["radicals"]
         replacement += st["replacement"]
+        is_toc, _ = _toc_texts(t.splitlines())
+        if is_toc:
+            toc_pages.append(pi + 1)
     return {
         "kind": "pdf", "pages": pages, "textChars": text_chars,
         "images": image_count, "scannedLikePages": blank,
+        "tocPages": len(toc_pages), "tocPageNumbers": toc_pages[:20],
+        "ocrNeeded": pages > 0 and blank > 0 and text_chars < pages * 40,
         "radicals": radical, "replacementChars": replacement,
         "metadata": {k: v for k, v in (d.metadata or {}).items() if v},
         "pageSizes": [[round(p.rect.width, 1), round(p.rect.height, 1)] for p in d[:min(3, pages)]],
     }
 
 
-def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = None) -> dict:
+def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = None,
+                page_indices: set[int] | list[int] | None = None,
+                skip_full_page_images: bool = False) -> dict:
     src = Path(path)
     d = pymupdf.open(str(src))
-    pages_raw = [_page_raw_blocks(p, i + 1, fixes or []) for i, p in enumerate(d)]
-    page_heights = [p.rect.height for p in d]
-    page_widths = [p.rect.width for p in d]
+    if page_indices is None:
+        selected = list(range(d.page_count))
+    else:
+        selected = sorted({i for i in page_indices if 0 <= i < d.page_count})
+    if not selected:
+        raise SystemExit("No pages selected for extraction")
+    page_numbers = [i + 1 for i in selected]
+    pages_raw = [_page_raw_blocks(d[i], page_numbers[n], fixes or [],
+                                  skip_full_page_images)
+                 for n, i in enumerate(selected)]
+    page_heights = [d[i].rect.height for i in selected]
+    page_widths = [d[i].rect.width for i in selected]
     body, body_x0, _ = _body_metrics(pages_raw)
     hf_keys = _header_footer_keys(pages_raw, page_heights)
 
@@ -326,15 +406,23 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
     used_imgs: dict[str, str] = {}
     warnings = Counter()
     columns = 0
+    toc_pages = 0
+    toc_lines = 0
     removed_hf = 0
     total_radicals = total_fixes = total_repl = 0
     fig_no = 0
     consumed: set[int] = set()
     blocks_out: list[dict] = []
 
-    # first pass: collect blocks per page in order
+    # first pass: collect blocks per page in order; skip printed TOC pages
     page_items: list[list[dict]] = []
-    for pi, page in enumerate(d):
+    for pi in range(len(pages_raw)):
+        is_toc, matches, _ = _toc_page_info(pages_raw[pi])
+        if is_toc:
+            toc_pages += 1
+            toc_lines += matches
+            page_items.append([])
+            continue
         ordered, two_col = _order_page_blocks(pages_raw[pi], page_widths[pi] or 1)
         if two_col:
             columns += 1
@@ -363,7 +451,7 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
                         role, layout = ("photo" if luma >= 100 else "screenshot"), "fit"
                     candidates.append({"kind": "figure", "asset": aid, "width": w, "height": h,
                                        "aspect": round(aspect, 3), "layout": layout,
-                                       "page": pi + 1, "bbox": b["bbox"],
+                                       "page": page_numbers[pi], "bbox": b["bbox"],
                                        "role": role, "caption": "", "alt": ""})
                 continue
             st = _block_stats(b, body)
@@ -378,9 +466,12 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
                 removed_hf += 1
                 continue
             cl = _classify(st, body, body_x0)
+            if cl == "toc":
+                toc_lines += 1
+                continue
             if cl == "skip":
                 continue
-            cand = {"kind": cl, "stats": st, "page": pi + 1, "bbox": b["bbox"]}
+            cand = {"kind": cl, "stats": st, "page": page_numbers[pi], "bbox": b["bbox"]}
             candidates.append(cand)
             total_radicals += b["norm_stats"]["radicals"]
             total_fixes += b["norm_stats"]["fixes"]
@@ -414,7 +505,8 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
         st = c["stats"]
         # merge consecutive same-type blocks on the same page
         if pending and pending["type"] == ("heading" if cl in ("heading", "h4") else cl) and \
-           pending.get("_page") == c["page"]:
+           pending.get("_page") == c["page"] and \
+           not _has_toc_line(pending["_lines"]) and not _has_toc_line(st["lines"]):
             gap = st["y0"] - pending["_y1"]
             same_x = abs(st["x0"] - pending["_x0"]) < 3
             if cl in ("heading", "h4") and pending["type"] == "heading" and gap < 10:
@@ -537,17 +629,25 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
         ("manual-fixes", "应用了用户指定的文本修正", total_fixes),
         ("removed-header-footer", "移除了重复页眉/页脚/页码", removed_hf),
         ("two-column", "检测到多栏并尝试按列排序", columns),
+        ("toc-pages", "检测到印刷目录页，已跳过；阅读版会重新生成目录", toc_pages),
+        ("toc-lines", "跳过了疑似目录行", toc_lines),
     ]:
         if n:
             add_warning(doc, code, msg, n)
     scanned = 0
-    for page in d:
+    for i in selected:
+        page = d[i]
         if len(page.get_text().strip()) < 40 and page.get_images(full=True):
             scanned += 1
     if scanned:
         add_warning(doc, "scanned-pages", "部分页面文本层稀少，可能是扫描页；建议 OCR/MinerU", scanned)
     doc["meta"]["pages"] = d.page_count
+    doc["meta"]["tocPages"] = toc_pages
+    doc["meta"]["tocLines"] = toc_lines
     doc["meta"]["bodyFontSize"] = body
+    if page_indices is not None:
+        doc["preview"] = {"sourcePages": d.page_count,
+                          "pageNumbers": page_numbers}
     doc["stats"] = {"pages": d.page_count, "blocks": len(final),
                     "figures": sum(1 for b in final if b["type"] == "figure"),
                     "codeBlocks": sum(1 for b in final if b["type"] == "code")}

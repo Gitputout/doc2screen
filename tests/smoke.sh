@@ -130,4 +130,11 @@ if [ "$HAS_CHROME" -eq 1 ]; then
 fi
 python3 "$ROOT/scripts/profile_helper.py" \
   --inches 6.39 --aspect 16:9.5 --page-ratio 0.706 --css-width 390 >/dev/null
+
+echo "=== preview sample ==="
+python3 "$ROOT/scripts/doc2screen.py" preview "$TMP/sample.md" \
+  --out "$TMP/preview" --profiles phone-notes --formats html >/dev/null
+test -f "$TMP/preview/preview.json"
+test -f "$TMP/preview/preview-phone-notes.html"
+
 echo "smoke checks passed"

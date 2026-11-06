@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-**Project license:** AGPL-3.0 (see `LICENSE`). v0.1 imports PyMuPDF, which is AGPL-3.0 or commercial; the whole distributed work is therefore AGPL-3.0. A future pypdfium2 backend can allow a permissive license.
+**Project license:** AGPL-3.0 (see `LICENSE`). v0.2 imports PyMuPDF, which is AGPL-3.0 or commercial; the whole distributed work is therefore AGPL-3.0. A future pypdfium2 backend can allow a permissive license.
 
 doc2screen is an original implementation. It does **not** copy source code, documentation text, images, test fixtures, or model weights from the projects below. The list separates runtime dependencies from concept references.
 
@@ -8,7 +8,7 @@ doc2screen is an original implementation. It does **not** copy source code, docu
 
 | Package | License | Use |
 |---|---|---|
-| PyMuPDF (pymupdf) | **AGPL-3.0 or Artifex commercial** | PDF extraction (v0.1 local backend) |
+| PyMuPDF (pymupdf) | **AGPL-3.0 or Artifex commercial** | PDF extraction (v0.2 local backend) |
 | lxml | BSD-3-Clause | HTML parsing |
 | pypdfium2 (planned default) | Apache-2.0 / BSD-3-Clause | Permissive PDF backend |
 | WeasyPrint (planned) | BSD-3-Clause | PDF fallback |
@@ -20,6 +20,8 @@ doc2screen is an original implementation. It does **not** copy source code, docu
 | Tool | License | Use |
 |---|---|---|
 | Pandoc | GPL-2.0-or-later | DOCX/ODT/EPUB/HTML/Markdown → semantic HTML |
+| OCRmyPDF | MPL-2.0 | Optional scanned-PDF OCR (external command) |
+| Tesseract | Apache-2.0 | Optional OCR engine; language data has upstream licenses |
 | Google Chrome / Chromium | proprietary / BSD | HTML → PDF (headless) |
 | Node.js | MIT | runtime for PDF/verification helpers |
 | puppeteer-core | Apache-2.0 | drive Chrome for PDF/verification |

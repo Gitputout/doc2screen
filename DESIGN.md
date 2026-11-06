@@ -1,7 +1,7 @@
 # doc2screen 设计文档
 
-> 状态：Draft v0.1 · 2026-11-05
-> 实现状态：v0.1 已实现 PDF/DOCX/ODT/EPUB/HTML/Markdown/RST/LaTeX/TXT → 自包含 HTML、EPUB3、Chrome PDF；已通过 30 道 Linux PDF 与 smoke test 验证。
+> 状态：Draft v0.2 · 2026-11-06
+> 实现状态：v0.2 已实现 PDF/DOCX/ODT/EPUB/HTML/Markdown/RST/LaTeX/TXT → 自包含 HTML、EPUB3、Chrome PDF；已通过 30 道 Linux PDF 与 smoke test 验证。
 > 定位：开源 CLI + Claude Code Skill。把不同格式的文档转成「以阅读为中心」的语义内容，再按目标屏幕输出 HTML / EPUB / PDF。
 > 不是又一个 PDF 解析器，而是编排层、阅读层、打包层和质量门禁。
 
@@ -76,7 +76,7 @@
 3. **确定性核心 + 可选重依赖**：核心不依赖 GPU/大模型。
 4. **可追溯**：PDF 提取块带来源页/bbox；裁剪删除有审计记录。
 5. **不自动误删**：推广/广告不自动删除；由用户通过 `--drop-text`/`--drop-asset` 显式处理，并在 `build.json` 中审计。
-6. **许可证边界清晰**：v0.1 为 AGPL-3.0（因 PyMuPDF）；未来切换 pypdfium2 后再考虑宽松许可证。
+6. **许可证边界清晰**：v0.2 为 AGPL-3.0（因 PyMuPDF）；未来切换 pypdfium2 后再考虑宽松许可证。
 
 ---
 
@@ -88,9 +88,24 @@
 doc2screen inspect input.pdf
 ```
 
-输出 `work/inspect.json`：页数、页面尺寸、是否扫描件、文本层健康度（字符数/乱码/康熙部首/替换字符）、图片数量、分栏检测、建议 extractor。
+输出 `work/inspect.json`：页数、页面尺寸、是否扫描件、文本层健康度（字符数/乱码/康熙部首/替换字符）、图片数量、印刷目录页 `tocPages`、`ocrNeeded`、分栏检测、建议 extractor。
 
-**门槛：** 文本层为空或严重损坏 → 走 OCR adapter，不硬提取。
+**门槛：** 文本层为空或严重损坏 → `--ocr auto`（OCRmyPDF/Tesseract）或 MinerU adapter，不硬提取。
+
+### Step 0.5：预检预览（输出前确认）
+
+```bash
+doc2screen preview input.pdf --out preview/ \
+  --profiles phone-notes,phone-16x9.5 --formats html,pdf
+```
+
+- 只抽取少量代表页/块，不跑完整文档；
+- 输出候选 profile 的 HTML/PDF 样例和 `preview.json`；
+- `preview.json` 包含 `tocPages`、`scannedLikePages`、`ocrNeeded`、warnings、样例页/块、输出路径；
+- agent 把样例交给用户确认内容、排版、profile、OCR 语言和删除项，确认后才跑完整 `build`；
+- 这是控制 token/时间成本和避免错误 profile 的前置门禁。
+
+完整的转换风险清单见 `docs/conversion-risks.md`。
 
 ### Step 1：提取
 
@@ -108,7 +123,7 @@ work/
 | 输入 | 默认 extractor | 备选 |
 |---|---|---|
 | PDF（文本层） | PyMuPDF（本地）/ pypdfium2（开源默认） | MinerU（复杂版面） |
-| PDF（扫描件） | MinerU adapter | Tesseract + 页面图 |
+| PDF（扫描件） | OCRmyPDF + Tesseract（可选依赖） | MinerU / PaddleOCR |
 | DOCX / ODT | Pandoc | mammoth |
 | EPUB | Pandoc | 直接解析 XHTML |
 | HTML | Pandoc / 原文清洗 | readability/trafilatura |
@@ -124,7 +139,9 @@ work/
 - 列表 = 缩进层级 / bullet；
 - 图片 = 原始字节 + bbox + 哈希去重；图注取上下方最近且以「图/Figure/表/Table」开头的文本；
 - 阅读顺序：单栏 y/x 排序；多栏用投影空白列检测；
-- 页眉页脚：顶部/底部 8% 带内、≥30% 页面重复 → 删除。
+- 页眉页脚：顶部/底部 8% 带内、≥30% 页面重复 → 删除；
+- 印刷目录页：点线 + 页码行检测，整页跳过并在 `warnings`/`meta.tocPages` 记录；
+- OCR 模式：跳过覆盖整页的背景图，避免正文夹带扫描页图片。
 
 ### Step 2：规范化
 
@@ -140,7 +157,7 @@ work/
 
 自动（安全）：重复页眉/页脚/页码、空块、重复图片、过小装饰图。重复段落去重和水印识别尚未实现。
 
-需复核：扫码/关注/公众号/训练营/广告/优惠/加群、二维码、外链密集块、封面/目录/版权页。当前 v0.1 不自动标记或删除这些内容。
+需复核：扫码/关注/公众号/训练营/广告/优惠/加群、二维码、外链密集块、封面/目录/版权页。当前 v0.2 不自动标记或删除这些内容。
 
 裁剪：使用 `build --start-at/--end-at/--drop-text/--drop-asset` 显式指定；被删除的 block id 与原因记录在 `out/build.json` 的 `trim.removedBlocks`，便于审计。
 
@@ -248,14 +265,14 @@ doc2screen verify out/ --source work/doc.json
 
 ### 6.2 推广内容（需复核）
 
-| 规则 | 例子 | v0.1 行为 |
+| 规则 | 例子 | v0.2 行为 |
 |---|---|---|
 | 推广文本 | 扫码、关注、公众号、训练营、广告、优惠、加群 | 不自动删除；可用 `--drop-text` |
 | 二维码 | 方形、高对比、黑白块 | 作为图片保留；可用 `--drop-asset` |
 | 外链密集 | 短段落含 ≥3 个 URL | 保留，人工复核 |
 | 封面/目录/版权页 | 首页、重复标题 | 保留，可用 `--start-at/--end-at` 裁剪 |
 
-**原则：宁可保留，不可误删。** v0.1 不自动删除推广块；显式删除会写入 `build.json` 的 `trim.removedBlocks`。
+**原则：宁可保留，不可误删。** v0.2 不自动删除推广块；显式删除会写入 `build.json` 的 `trim.removedBlocks`。
 
 ---
 
@@ -343,7 +360,7 @@ OEBPS/content.opf, nav.xhtml, css/reader.css, text/chapter-*.xhtml, images/...
 **依赖边界：**
 
 ```
-AGPL-3.0 核心（v0.1；因 PyMuPDF）
+AGPL-3.0 核心（v0.2；因 PyMuPDF）
 ├── lxml / pypdfium2 / WeasyPrint(可选)     import
 ├── Pandoc / Chrome                         subprocess，不打包
 ├── PyMuPDF                                 optional/local（AGPL）
@@ -461,7 +478,7 @@ AGPL-3.0 核心（v0.1；因 PyMuPDF）
 
 **Phase 1（MVP）**：inspect、PDF 提取（PyMuPDF 本地）、Pandoc（DOCX/EPUB/HTML/MD/TXT）、DocModel、HTML 渲染、profile、Chrome PDF、基础 verify。
 
-**Phase 2（v0.1 已完成基础版）**：EPUB3、自动校验、CI 已落地；图片切面板、交互式 curation 仍待做。
+**Phase 2（v0.2 已完成基础版）**：EPUB3、自动校验、CI、OCR MVP、预检 preview 已落地；图片切面板、交互式 curation、MinerU adapter 仍待做。
 
 **Phase 3**：pypdfium2 默认后端、MinerU adapter、PyMuPDF 可选、公式/表格增强。
 
@@ -472,7 +489,9 @@ AGPL-3.0 核心（v0.1；因 PyMuPDF）
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 提取质量不足 | 标题/代码/图片不准 | 可选后端；测试量化 |
-| 扫描件 OCR | 文本错 | 标记；建议 MinerU；不伪造 |
+| 扫描件 OCR | 文本错/版面乱 | `--ocr auto` + preview + `doctor`；复杂版面建议 MinerU；不伪造 |
+| 印刷目录混入正文 | 排版不自然 | 目录页检测并跳过；渲染器重建目录 |
+| 全量转换成本高/参数错 | 时间与 token 浪费 | `preview` 抽样 + 用户确认后再 `build` |
 | 多栏/复杂表格 | 阅读顺序错 | 投影检测 + 警告 + 可选 Docling |
 | EPUB 兼容性 | 排版崩 | 简化 CSS、无 JS、epubcheck |
 | 中文字体缺失 | 方框/替换 | 字体栈 + 警告 |
@@ -496,6 +515,9 @@ AGPL-3.0 核心（v0.1；因 PyMuPDF）
 
 ```bash
 doc2screen inspect input.pdf
+
+doc2screen preview input.pdf --out preview/ \
+  --profiles phone-notes,phone-16x9.5 --ocr auto
 
 doc2screen build input.pdf --profile phone-notes \
   --out out/  # 默认只输出 PDF
