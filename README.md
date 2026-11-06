@@ -1,5 +1,9 @@
 # doc2screen
 
+[![CI](https://github.com/Gitputout/doc2screen/actions/workflows/ci.yml/badge.svg)](https://github.com/Gitputout/doc2screen/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Gitputout/doc2screen?label=release)](https://github.com/Gitputout/doc2screen/releases/latest)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+
 Turn documents into **screen-adaptive reading editions**: one semantic source, multiple outputs — self-contained HTML, EPUB3, and device-sized PDF.
 
 doc2screen does not wrap the original PDF layout in HTML. It extracts headings, paragraphs, lists, code, tables, and figures into a `DocModel`, then renders a reflowable single-column reader. That is what makes a document readable on a 6-inch phone instead of merely zoomable.
@@ -7,6 +11,16 @@ doc2screen does not wrap the original PDF layout in HTML. It extracts headings, 
 This repository is also a Claude Code and Codex skill: `SKILL.md` tells the agent how to drive the CLI.
 
 ![PDF, DOCX, EPUB, Markdown, and text are reorganized into reading editions for phone, e-reader, and tablet screens](assets/workflow.svg)
+
+## What's new in v0.2.0
+
+- **Preview-first workflow** — `doc2screen preview` samples representative pages/blocks, renders candidate screen profiles, and writes `preview.json` for user confirmation before the full build.
+- **Scanned PDFs** — optional OCRmyPDF + Tesseract path with `--ocr auto|off|force` and `--ocr-lang`; preview OCRs only selected pages.
+- **Printed TOC cleanup** — dot-leader/page-number TOC lines are detected and skipped, and the reader rebuilds its own TOC.
+- **UTF-8 fix** — DOCX/ODT/EPUB/HTML/Markdown/RST/LaTeX no longer produce mojibake for Chinese and other non-ASCII text.
+- **Stronger verification** — PDF page size/aspect, EPUB nav/reference checks, and profile inference from `build.json`.
+
+See the [v0.2.0 release notes](https://github.com/Gitputout/doc2screen/releases/tag/v0.2.0) and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Why
 
@@ -62,9 +76,23 @@ python3 scripts/doc2screen.py doctor
 
 For CLI-only use, clone into any directory and run the same dependency commands there.
 
+Prefer a source archive? Download the latest release: [`doc2screen-v0.2.0.zip`](https://github.com/Gitputout/doc2screen/releases/latest).
+
 On macOS/Linux, `pandoc` is available via Homebrew (`brew install pandoc`) or apt (`apt install pandoc`). Chrome must be installed for PDF export; set `CHROME_PATH` if it is not in a standard location. Ubuntu OCR: `sudo apt install tesseract-ocr tesseract-ocr-chi-sim ocrmypdf`.
 
 `doctor` prints versions and resolved paths.
+
+## Using as a Claude Code / Codex skill
+
+When a user hands the skill a document, the agent follows this sequence:
+
+1. **Inspect** the source and report page count, text-layer health, `tocPages`, `scannedLikePages`, and `ocrNeeded`.
+2. **Preview** a few representative pages/blocks at candidate screen profiles; write `preview.json`.
+3. **Ask the user** to confirm content/layout, screen profile, removals, and OCR language.
+4. **Build** with the confirmed options.
+5. **Verify** and report warnings, removed blocks, and output paths.
+
+The full agent contract is in [`SKILL.md`](SKILL.md). The preflight step is deliberate: it avoids spending a full conversion on an unconfirmed layout or screen size.
 
 Default `build` output is **PDF only**. Add HTML/EPUB explicitly with `--formats pdf,html,epub`.
 
@@ -102,10 +130,17 @@ Useful options:
 ```bash
 SKILL=/path/to/doc2screen
 
+# Check dependencies (including optional OCR)
+python3 "$SKILL/scripts/doc2screen.py" doctor
+
 # Inspect
 python3 "$SKILL/scripts/doc2screen.py" inspect input.pdf --out work/
 
-# Build a phone-sized PDF (default), keeping only a section
+# Preview a few pages at candidate screen profiles before the full build
+python3 "$SKILL/scripts/doc2screen.py" preview input.pdf \
+  --out preview/ --profiles phone-notes,phone-16x9.5 --formats html,pdf
+
+# After the user confirms the preview, build a phone-sized PDF (default)
 python3 "$SKILL/scripts/doc2screen.py" build input.pdf \
   --profile phone-notes \
   --start-at "Linux 命令面试题" \
