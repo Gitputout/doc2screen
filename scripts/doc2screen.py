@@ -28,6 +28,30 @@ def _fixes(values) -> list[tuple[str, str]]:
     return out
 
 
+FORMATS = ("pdf", "html", "epub")
+
+
+def _formats(value) -> list[str]:
+    """Parse and validate --formats; default to PDF."""
+    formats = [x.strip().lower() for x in (value or "pdf").split(",") if x.strip()]
+    unknown = sorted(set(formats) - set(FORMATS))
+    if unknown:
+        raise SystemExit(
+            f"Unknown format(s): {', '.join(unknown)}. Available: {', '.join(FORMATS)}")
+    if not formats:
+        raise SystemExit(f"No formats specified. Available: {', '.join(FORMATS)}")
+    return list(dict.fromkeys(formats))
+
+
+def _input_path(value: str, label: str = "Input") -> Path:
+    p = Path(value).resolve()
+    if not p.exists():
+        raise SystemExit(f"{label} does not exist: {p}")
+    if not p.is_file():
+        raise SystemExit(f"{label} is not a file: {p}")
+    return p
+
+
 def _apply_fixes(doc: dict, fixes: list[tuple[str, str]]) -> int:
     if not fixes:
         return 0
@@ -82,9 +106,11 @@ def trim_doc(doc: dict, start_at: str | None = None, end_at: str | None = None,
             hay = " ".join(str(b.get(k, "")) for k in ("text", "caption", "alt"))
             if b.get("type") == "list":
                 hay += " " + " ".join(str(x) for x in b.get("items", []))
+            if b.get("html") and not b.get("text"):
+                hay += " " + text_of_html(str(b["html"]))
             if any(t and t in hay for t in drop_text):
                 removed.append({"id": b["id"], "reason": "drop-text",
-                                "preview": hay[:80]})
+                                "preview": re.sub(r"\s+", " ", hay).strip()[:80]})
             else:
                 keep.append(b)
         blocks = keep
@@ -126,7 +152,7 @@ def extract(src: Path, out_dir: Path, fixes: list[tuple[str, str]]) -> dict:
 
 
 def cmd_inspect(args) -> int:
-    src = Path(args.input).resolve()
+    src = _input_path(args.input)
     out = Path(args.out or "work")
     out.mkdir(parents=True, exist_ok=True)
     if src.suffix.lower() == ".pdf":
@@ -142,7 +168,7 @@ def cmd_inspect(args) -> int:
 
 
 def cmd_extract(args) -> int:
-    src = Path(args.input).resolve()
+    src = _input_path(args.input)
     out = Path(args.out or "work")
     doc = extract(src, out, _fixes(args.fix))
     stats = doc.get("stats", {})
@@ -158,9 +184,31 @@ def _profile_from(args, doc=None):
     return get_profile(name)
 
 
+def _profile_for_verify(args, target: Path):
+    """Resolve the profile from CLI flags, then build.json, then the default."""
+    if args.width and args.height:
+        return get_profile(width=args.width, height=args.height)
+    if args.profile:
+        return get_profile(args.profile)
+    build_json = (target if target.is_dir() else target.parent) / "build.json"
+    if build_json.exists():
+        try:
+            profile_id = load_json(build_json).get("profile")
+        except Exception:
+            profile_id = None
+        if profile_id:
+            try:
+                return get_profile(profile_id)
+            except SystemExit:
+                m = re.fullmatch(r"custom-(\d+)x(\d+)", profile_id)
+                if m:
+                    return get_profile(width=int(m.group(1)), height=int(m.group(2)))
+    return get_profile()
+
+
 def cmd_render(args) -> int:
     from render import render
-    doc_path = Path(args.doc).resolve()
+    doc_path = _input_path(args.doc, "Document")
     doc = load_json(doc_path)
     profile = _profile_from(args, doc)
     out = Path(args.out or (doc_path.parent / "book.html")).resolve()
@@ -286,7 +334,8 @@ def verify_html(html: Path, profile: dict, out_json: Path) -> dict:
 def cmd_build(args) -> int:
     from render import render
     from export_epub import export_epub, epub_report
-    src = Path(args.input).resolve()
+    src = _input_path(args.input)
+    formats = _formats(args.formats)
     out = Path(args.out or "out").resolve()
     out.mkdir(parents=True, exist_ok=True)
     work = out / ".work"
@@ -299,7 +348,6 @@ def cmd_build(args) -> int:
     doc["profile"] = profile
     dump_json(doc, work / "doc.json")
     name = args.name or safe_filename(doc.get("meta", {}).get("title", src.stem))
-    formats = [x.strip().lower() for x in (args.formats or "pdf").split(",") if x.strip()]
     result = {"input": str(src), "profile": profile.get("id"),
               "trim": {"kept": trim_report.get("kept"),
                        "removed": len(trim_report.get("removed", [])),
@@ -359,14 +407,14 @@ def cmd_verify(args) -> int:
         html = hs[0] if hs else None
         pdf = ps[0] if ps else None
         epub = es[0] if es else None
-    profile = _profile_from(args)
+    profile = _profile_for_verify(args, target)
     if html:
         vh = verify_html(html, profile, out / "verify-html.json")
         result["checks"]["html"] = vh
         result["ok"] = result["ok"] and bool(vh.get("ok"))
     if pdf:
         result["checks"]["pdf"] = pdf_report(pdf, profile)
-        result["ok"] = result["ok"] and result["checks"]["pdf"]["blankPages"] == 0
+        result["ok"] = result["ok"] and pdf_ok(result["checks"]["pdf"])
     if epub:
         result["checks"]["epub"] = epub_report(str(epub))
         result["ok"] = result["ok"] and result["checks"]["epub"]["ok"]

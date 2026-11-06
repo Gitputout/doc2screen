@@ -216,7 +216,9 @@ def extract_via_pandoc(path: str, out_dir: str) -> dict:
     proc = subprocess.run(cmd, cwd=work, capture_output=True, text=True)
     if proc.returncode != 0:
         raise SystemExit("Pandoc failed:\n" + (proc.stderr or proc.stdout)[-2000:])
-    tree = lhtml.parse(str(raw))
+    # Pandoc emits UTF-8 without a meta charset; lxml would otherwise default
+    # to Latin-1 and mojibake every non-ASCII character.
+    tree = lhtml.parse(str(raw), parser=lhtml.HTMLParser(encoding="utf-8"))
     b = Builder(work, src)
     title_el = tree.find(".//title")
     if title_el is not None and title_el.text_content().strip():

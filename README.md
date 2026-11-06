@@ -183,6 +183,8 @@ In print CSS, images are scaled with `max-height` so tall screenshots are not cl
 
 A failed check returns a non-zero exit code.
 
+When you verify a build directory, `verify` reads the profile from `build.json` unless `--profile` is given or both `--width` and `--height` are set.
+
 CI runs the end-to-end smoke test with a document containing an image and hard line break, then checks the generated HTML, EPUB, and PDF.
 
 ## Support matrix

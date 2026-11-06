@@ -158,6 +158,8 @@ EPUB export uses stdlib zip: XHTML chapters, nav, OPF, NCX, CSS, images; no JS.
 - PDF page size, blank pages, image aspect ratios, outline;
 - EPUB `mimetype`/OPF/nav/manifest integrity.
 
+If `--profile` is omitted when verifying a build directory, `verify` reads the profile from `build.json`; an explicit `--profile` or `--width`/`--height` still overrides it.
+
 Fix failures, do not ship a broken PDF/EPUB.
 
 ## Content curation

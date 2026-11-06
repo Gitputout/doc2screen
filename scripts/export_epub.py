@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import os
+import posixpath
 import re
 import uuid
 import zipfile
@@ -33,12 +34,13 @@ blockquote{border-left:3px solid #bbb;margin:1em 0;padding-left:.8em;color:#555}
 """
 
 
-def _xhtml(title: str, body: str) -> str:
+def _xhtml(title: str, body: str, css_href: str = "../css/reader.css",
+           lang: str = "zh-CN") -> str:
     return f'''<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN" lang="zh-CN">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="{esc(lang)}" lang="{esc(lang)}">
 <head><meta charset="utf-8"/><title>{esc(title)}</title>
-<link rel="stylesheet" type="text/css" href="../css/reader.css"/></head>
+<link rel="stylesheet" type="text/css" href="{esc(css_href)}"/></head>
 <body>{body}</body></html>'''
 
 
@@ -126,13 +128,13 @@ def export_epub(doc: dict, out_file: str, work_dir: str) -> dict:
         z.writestr("OEBPS/text/title.xhtml", _xhtml(title,
             f'<div class="titlepage"><h1>{esc(title)}</h1>'
             + (f'<p class="author">{esc(author)}</p>' if author else "")
-            + f'<p class="small">由 doc2screen 生成</p></div>'))
+            + f'<p class="small">由 doc2screen 生成</p></div>', lang=lang))
 
         manifest, spine, nav_items = [], [], []
         for i, ch in enumerate(chapters, 1):
             fn = f"chapter-{i:03d}.xhtml"
             body = "\n".join(_block_html(doc, b, "../images/") for b in ch["blocks"])
-            z.writestr(f"OEBPS/text/{fn}", _xhtml(ch["title"], body))
+            z.writestr(f"OEBPS/text/{fn}", _xhtml(ch["title"], body, lang=lang))
             manifest.append(f'<item id="ch{i}" href="text/{fn}" media-type="application/xhtml+xml"/>')
             spine.append(f'<itemref idref="ch{i}"/>')
             nav_items.append(f'<li><a href="text/{fn}">{esc(ch["title"])}</a></li>')
@@ -147,7 +149,8 @@ def export_epub(doc: dict, out_file: str, work_dir: str) -> dict:
 
         nav_body = ('<nav xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" '
                     'epub:type="toc" id="toc"><h1>目录</h1><ol>' + "".join(nav_items) + "</ol></nav>")
-        z.writestr("OEBPS/nav.xhtml", _xhtml("目录", nav_body))
+        z.writestr("OEBPS/nav.xhtml", _xhtml("目录", nav_body,
+                                             css_href="css/reader.css", lang=lang))
 
         opf = f'''<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
@@ -193,9 +196,24 @@ def epub_report(path: str) -> dict:
             for n in names:
                 if n in required or n.endswith((".xhtml", ".ncx")):
                     try:
-                        ET.fromstring(z.read(n))
+                        root = ET.fromstring(z.read(n))
                     except Exception as e:
                         out["errors"].append(f"invalid XML {n}: {e}")
+                        continue
+                    if n.endswith(".xhtml"):
+                        for el in root.iter():
+                            for attr in ("href", "src"):
+                                ref = el.get(attr)
+                                if not ref or ref.startswith("#"):
+                                    continue
+                                if (re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", ref)
+                                        or ref.startswith("//")):
+                                    continue
+                                target = posixpath.normpath(posixpath.join(
+                                    posixpath.dirname(n), ref.split("#", 1)[0]))
+                                if target not in names:
+                                    out["errors"].append(
+                                        f"missing reference {ref} in {n}")
             if "OEBPS/content.opf" in names:
                 root = ET.fromstring(z.read("OEBPS/content.opf"))
                 ns = {"opf": "http://www.idpf.org/2007/opf"}

@@ -17,6 +17,8 @@ cat > "$TMP/sample.md" <<'MD'
 
 This is **bold**, this is `code`, and this is a list.
 
+这是一段中文正文，用来验证 UTF-8 编码。
+
 Line one<br>
 Line two.
 
@@ -66,6 +68,7 @@ import sys
 from pathlib import Path
 doc = json.loads(Path(sys.argv[1]).read_text())
 assert any(b["type"] == "figure" for b in doc["blocks"])
+assert any("中文正文" in (b.get("text") or "") for b in doc["blocks"])
 PY
 done
 
@@ -82,6 +85,8 @@ fi
 
 python3 - "$TMP/out-all" <<'PY'
 import json
+import posixpath
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -90,6 +95,10 @@ build = json.loads((out / "build.json").read_text())
 epub = Path(build["outputs"]["epub"])
 with zipfile.ZipFile(epub) as z:
     assert any(n.startswith("OEBPS/images/") for n in z.namelist())
+    nav = z.read("OEBPS/nav.xhtml").decode("utf-8")
+    href = re.search(r'<link[^>]+href="([^"]+)"', nav).group(1)
+    target = posixpath.normpath(posixpath.join("OEBPS", href))
+    assert target in z.namelist(), target
 assert build["verify_epub"]["ok"], build["verify_epub"]
 PY
 
@@ -100,6 +109,11 @@ fi
 if python3 "$ROOT/scripts/doc2screen.py" build "$TMP/sample.md" \
     --formats epub --start-at "not present" --out "$TMP/out-no-match" >/dev/null 2>&1; then
   echo "build accepted an unmatched start heading" >&2
+  exit 1
+fi
+if python3 "$ROOT/scripts/doc2screen.py" build "$TMP/sample.md" \
+    --formats docx --out "$TMP/out-bad-format" >/dev/null 2>&1; then
+  echo "build accepted an unknown format" >&2
   exit 1
 fi
 

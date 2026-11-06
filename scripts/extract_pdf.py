@@ -120,6 +120,18 @@ def _block_stats(b, body_size: float) -> dict:
     }
 
 
+def _union_bbox(a, b) -> tuple[float, float, float, float]:
+    if not a:
+        return tuple(b)
+    if not b:
+        return tuple(a)
+    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+
+
+def _polish_bbox(b) -> list[float]:
+    return [round(float(v), 1) for v in b]
+
+
 def _page_raw_blocks(page, page_no: int, fixes) -> list[dict]:
     out = []
     for b in page.get_text("dict")["blocks"]:
@@ -408,6 +420,7 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
             if cl in ("heading", "h4") and pending["type"] == "heading" and gap < 10:
                 pending["_lines"].extend(st["lines"])
                 pending["_y1"] = st["y1"]
+                pending["_bbox"] = _union_bbox(pending.get("_bbox"), c["bbox"])
                 i += 1
                 continue
             if cl == "paragraph" and gap < 10 and same_x:
@@ -415,11 +428,13 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
                 if prev_txt and prev_txt[-1] not in "。！？.!?；;":
                     pending["_lines"].extend(st["lines"])
                     pending["_y1"] = st["y1"]
+                    pending["_bbox"] = _union_bbox(pending.get("_bbox"), c["bbox"])
                     i += 1
                     continue
             if cl == "code" and gap < 20 and same_x:
                 pending["_lines"].extend(st["lines"])
                 pending["_y1"] = st["y1"]
+                pending["_bbox"] = _union_bbox(pending.get("_bbox"), c["bbox"])
                 i += 1
                 continue
             if cl == "list" and gap < 5 and same_x:
@@ -427,6 +442,7 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
                 if prev_txt and prev_txt[-1] not in "。！？.!?；;":
                     pending["_items"][-1] += _lines_html(st["lines"])
                     pending["_y1"] = st["y1"]
+                    pending["_bbox"] = _union_bbox(pending.get("_bbox"), c["bbox"])
                     i += 1
                     continue
         flush()
@@ -458,24 +474,24 @@ def extract_pdf(path: str, out_dir: str, fixes: list[tuple[str, str]] | None = N
             txt = txt.strip("\n")
             final.append(block("code", id=f"b{len(final)+1:04d}", text=txt,
                                language="", source={"page": b["_page"],
-                               "bbox": [round(v, 1) for v in b["_bbox"]]}))
+                               "bbox": _polish_bbox(b["_bbox"])}))
         elif b["type"] == "list":
             items = [x for x in b["_items"] if x.strip()]
             if items:
                 final.append(block("list", id=f"b{len(final)+1:04d}", ordered=bool(re.match(r"^\s*\d", text_of_html(items[0]))),
-                                   items=items, source={"page": b["_page"], "bbox": [0, 0, 0, 0]}))
+                                   items=items, source={"page": b["_page"], "bbox": _polish_bbox(b["_bbox"])}))
         elif b["type"] == "heading":
             html = _lines_html(b["_lines"])
             txt = text_of_html(html).strip()
             if txt:
                 final.append(block("heading", id=f"b{len(final)+1:04d}", level=b["level"],
-                                   text=txt, html=html, source={"page": b["_page"], "bbox": [0, 0, 0, 0]}))
+                                   text=txt, html=html, source={"page": b["_page"], "bbox": _polish_bbox(b["_bbox"])}))
         else:
             html = _lines_html(b["_lines"])
             txt = text_of_html(html).strip()
             if txt:
                 final.append(block("paragraph", id=f"b{len(final)+1:04d}", text=txt, html=html,
-                                   source={"page": b["_page"], "bbox": [0, 0, 0, 0]}))
+                                   source={"page": b["_page"], "bbox": _polish_bbox(b["_bbox"])}))
 
     # group adjacent list blocks into a single list (separate bullets are separate blocks)
     grouped: list[dict] = []
